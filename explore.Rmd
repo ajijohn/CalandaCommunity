@@ -1,8 +1,10 @@
 ---
 title: "Explore R Notebook - CalPhene"
 output:
-  pdf_document: default
+  html_document:
+    df_print: paged
   html_notebook: default
+  pdf_document: default
 ---
 
 
@@ -145,16 +147,16 @@ p <- expanded_data_log %>%
 # Display the plot
 print(p)
 ``` 
-# Use MeadoWatch fits
+# Use MeadoWatch sorta fits
 
 Our data is in this format
 
-#   class                          date         presence presence_num day_of_year
-# 1 Euphrasia rostkoviana aggr.    2023-06-10   No       0          161
-# 2 Euphrasia rostkoviana aggr.    2023-06-11   No       0          162
-# 3 Euphrasia rostkoviana aggr.    2023-06-12   No       0          163
-# 4 Euphrasia rostkoviana aggr.    2023-06-13   Yes      1          164
-# ... and so on for other species.
+#####   class                          date         presence presence_num day_of_year
+ 1 Euphrasia rostkoviana aggr.    2023-06-10   No       0          161
+ 2 Euphrasia rostkoviana aggr.    2023-06-11   No       0          162
+ 3 Euphrasia rostkoviana aggr.    2023-06-12   No       0          163
+ 4 Euphrasia rostkoviana aggr.    2023-06-13   Yes      1          164
+ ... and so on for other species.
 
 ```{r}
 
@@ -214,6 +216,29 @@ ggplot() +
   geom_point(data = expanded_data_log, aes(x = day_of_year, y = presence_num), color = "red", size = 2, alpha = 0.8) +
   # Overlay the fitted smooth probability curves
   geom_line(data = predicted_data_all, aes(x = day_of_year, y = pred), color = "blue", size = 1) +
+  facet_wrap(~ class, scales = "free_x") +
+  labs(title = "Fitted Phenophase Curves for All Species",
+       x = "Day of Year",
+       y = "Probability of Presence") +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+        
+```  
+
+# Sample species
+
+```{r}
+sp1 <- predicted_data_all %>% filter(class %in% c("Agrimonia eupatoria"))
+el1 <- expanded_data_log %>% filter(class %in% c("Agrimonia eupatoria"))
+
+# Now plot the observed data and overlay the fitted probability curves for all species.
+ggplot() +
+  # Plot the observed binary data points (presence 0/1)
+  geom_point(data = el1, aes(x = day_of_year, y = presence_num), color = "red", size = 2, alpha = 0.8) +
+  # Overlay the fitted smooth probability curves
+  geom_line(data = sp1, aes(x = day_of_year, y = pred), color = "blue", size = 1) +
   facet_wrap(~ class, scales = "free_x") +
   labs(title = "Fitted Phenophase Curves for All Species",
        x = "Day of Year",
