@@ -1,0 +1,226 @@
+---
+title: "Explore R Notebook - CalPhene"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+
+```{r}
+# Load required packages
+library(dplyr)
+library(lubridate)
+library(tidyverse)
+```
+
+
+```{r}
+
+# Read the CSV file (update the file path as needed)
+df <- read.csv("data/five-cameras-Calanda-2023.csv", stringsAsFactors = FALSE)
+
+# Convert the date_time column to Date format
+# The provided format is "2023:06:13 15:07:28"
+df$date <- as.Date(df$date_time, format = "%Y:%m:%d %H:%M:%S")
+
+# Create daily presence data:
+# For each species (class) and date, mark "Yes" if the sum of count is greater than 0.
+daily_presence <- df %>%
+  group_by(class, date) %>%
+  summarize(present = if_else(sum(count, na.rm = TRUE) > 0, "Yes", "No"),
+            .groups = "drop")
+
+# Filter only days when the species was observed (Yes)
+daily_presence_yes <- daily_presence %>%
+  filter(present == "Yes") %>%
+  arrange(class, date)
+
+# Aggregate consecutive "Yes" days into presence intervals.
+# The trick is to compute a grouping variable as the difference between the date (as integer) and the row number.
+presence_intervals <- daily_presence_yes %>%
+  group_by(class) %>%
+  arrange(date) %>%
+  mutate(interval_group = as.integer(date) - row_number()) %>%
+  group_by(class, interval_group) %>%
+  summarize(start_date = min(date),
+            end_date = max(date),
+            .groups = "drop")
+
+# Display the resulting presence intervals for each species
+print(presence_intervals)
+
+``` 
+
+
+
+```{r}
+# Create daily presence data for each species:
+# For each species (class) and each date, mark "Yes" if the sum of count > 0, else "No"
+daily_presence <- df %>%
+  group_by(class, date) %>%
+  summarize(present = if_else(sum(count, na.rm = TRUE) > 0, "Yes", "No"),
+            .groups = "drop")
+
+# Now, create a cumulative summary row per species:
+# - first_presence: earliest date with "Yes"
+# - last_presence: latest date with "Yes"
+# - total_presence_days: total count of days when presence == "Yes"
+cumulative_presence <- daily_presence %>%
+  group_by(class) %>%
+  summarize(first_presence = min(date[present == "Yes"], na.rm = TRUE),
+            last_presence = max(date[present == "Yes"], na.rm = TRUE),
+            total_presence_days = sum(present == "Yes"),
+            .groups = "drop")
+
+# Print the cumulative summary
+print(cumulative_presence)
+``` 
+# some 2022 data, so lets filter it
+
+
+```{r}
+cumulative_presence_2023 <- cumulative_presence %>% filter(year(first_presence) %in% c(2023))
+
+# Determine the overall date range (from the earliest first_presence to the latest last_presence)
+overall_dates_all <- seq.Date(as.Date('2023-01-01'), as.Date('2023-12-31'), by = "day")
+
+# Cross join species with the overall date range to create one row per species per day.
+# Then, mark "Yes" if the date is between first_presence and last_presence, otherwise "No".
+expanded_data_all <- cumulative_presence_2023 %>%
+  crossing(date = overall_dates_all) %>%
+  mutate(presence = if_else(date >= first_presence & date <= last_presence, "Yes", "No")) %>%
+  select(class, date, presence)
+
+# Display the new data frame
+print(expanded_data_all)
+``` 
+# lets check one species
+```{r}
+# Plot the results
+# We'll create a tile plot where the x-axis is the date and y-axis is the species.
+# The fill indicates whether the species was present ("Yes") or absent ("No").
+p <- expanded_data_all %>% 
+  filter(class %in% c("Euphrasia rostkoviana aggr.")) %>%
+  ggplot( aes(x = date, y = class, fill = presence)) +
+  geom_tile(color = "gray90") +
+  scale_fill_manual(values = c("Yes" = "steelblue", "No" = "white")) +
+  labs(title = "Species Presence Over Time",
+       x = "Date",
+       y = "Species",
+       fill = "Presence") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Display the plot
+print(p)
+``` 
+# Binomial fit
+
+```{r}
+
+# Convert presence to a numeric variable (1 for "Yes", 0 for "No")
+# and add a numeric day-of-year variable.
+expanded_data_log <- expanded_data_all %>%
+  mutate(presence_num = if_else(presence == "Yes", 1, 0),
+         day_of_year = yday(date))
+
+# Plot logistic regression curves by species.
+# We use geom_point() to show the daily binary data and geom_smooth() to add a logistic curve.
+p <- expanded_data_log %>%
+   filter(class %in% c("Euphrasia rostkoviana aggr.")) %>%
+  ggplot (aes(x = day_of_year, y = presence_num)) +
+  geom_point(alpha = 0.2) +
+  geom_smooth(method = "glm", 
+              method.args = list(family = "binomial"), 
+              se = FALSE, color = "blue") +
+  facet_wrap(~ class, ncol = 1) +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(title = "Logistic Curve of Species Presence by Day of Year",
+       x = "Day of Year",
+       y = "Probability of Presence") +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Display the plot
+print(p)
+``` 
+# Use MeadoWatch fits
+
+Our data is in this format
+
+#   class                          date         presence presence_num day_of_year
+# 1 Euphrasia rostkoviana aggr.    2023-06-10   No       0          161
+# 2 Euphrasia rostkoviana aggr.    2023-06-11   No       0          162
+# 3 Euphrasia rostkoviana aggr.    2023-06-12   No       0          163
+# 4 Euphrasia rostkoviana aggr.    2023-06-13   Yes      1          164
+# ... and so on for other species.
+
+```{r}
+
+# For inverse logit (logistic function)
+inv.logit <- plogis
+
+# Define your custom likelihood function for MLE that accepts data as extra arguments.
+curvefit_perplot <- function(param, days, phenophase) {
+  peakp  <- param[1]   # peak day (time of peak phenophase)
+  rangep <- param[2]   # width parameter (should be negative for a concave-down shape)
+  maxp   <- param[3]   # offset on the logit scale
+  
+  # Compute the predicted probability using the quadratic logit model:
+  pred <- inv.logit(rangep * (days - peakp)^2 + maxp)
+  
+  # Calculate the log-likelihood for the binary outcomes
+  llik <- dbinom(phenophase, size = 1, prob = pred, log = TRUE)
+  
+  # Return the negative sum of log-likelihoods
+  return(-sum(llik))
+}
+
+# Fit the model for each species and produce a prediction grid:
+predicted_data_all <- expanded_data_log %>%
+  group_by(class) %>%
+  do({
+    d <- .
+    # Extract the day_of_year and binary presence for the current species
+    days <- d$day_of_year
+    phenophase <- d$presence_num
+    
+    # Provide initial guesses: use the median day as a starting peak, a small negative value for rangep, and 0 for maxp.
+    init_params <- c(peakp = median(days), rangep = -0.01, maxp = 0)
+    
+    # Fit the model using optim(); if the fit fails, skip this group.
+    fit <- try(optim(par = init_params, 
+                     fn = curvefit_perplot, 
+                     days = days, 
+                     phenophase = phenophase,
+                     method = "Nelder-Mead"), silent = TRUE)
+    if (inherits(fit, "try-error")) {
+      return(data.frame())
+    }
+    fitted_params <- fit$par
+    
+    # Create a prediction grid over the range of day_of_year for this species.
+    d_pred <- data.frame(day_of_year = seq(min(days), max(days), length.out = 100))
+    d_pred$pred <- inv.logit(fitted_params[2] * (d_pred$day_of_year - fitted_params[1])^2 + fitted_params[3])
+    d_pred$class <- unique(d$class)
+    d_pred
+  }) %>%
+  ungroup()
+
+# Now plot the observed data and overlay the fitted probability curves for all species.
+ggplot() +
+  # Plot the observed binary data points (presence 0/1)
+  geom_point(data = expanded_data_log, aes(x = day_of_year, y = presence_num), color = "red", size = 2, alpha = 0.8) +
+  # Overlay the fitted smooth probability curves
+  geom_line(data = predicted_data_all, aes(x = day_of_year, y = pred), color = "blue", size = 1) +
+  facet_wrap(~ class, scales = "free_x") +
+  labs(title = "Fitted Phenophase Curves for All Species",
+       x = "Day of Year",
+       y = "Probability of Presence") +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+        
+```  
