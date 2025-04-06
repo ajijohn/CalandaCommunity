@@ -35,3 +35,6 @@ The script fits the model with optim() and plots the observed data along with th
 git clone https://github.com/ajijohn/CalandaCommunity.git
 cd CalandaCommunity
 ```
+
+## Colloboration 
+

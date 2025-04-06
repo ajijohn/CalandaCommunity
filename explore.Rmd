@@ -89,7 +89,7 @@ overall_dates_all <- seq.Date(as.Date('2023-01-01'), as.Date('2023-12-31'), by =
 # Cross join species with the overall date range to create one row per species per day.
 # Then, mark "Yes" if the date is between first_presence and last_presence, otherwise "No".
 expanded_data_all <- cumulative_presence_2023 %>%
-  crossing(date = overall_dates_all) %>%
+  tidyr::crossing(date = overall_dates_all) %>%
   mutate(presence = if_else(date >= first_presence & date <= last_presence, "Yes", "No")) %>%
   select(class, date, presence)
 

@@ -1,0 +1,251 @@
+---
+title: "Analysis"
+format: html
+editor: visual
+---
+
+
+## Running Code
+
+Load
+
+```{r}
+# Install if not already installed
+install.packages(c("igraph", "networkDynamic", "tsna", "lubridate", "tidyverse"))
+```
+
+You can add options to executable code like this
+
+```{r}
+
+library(tidyverse)
+library(lubridate)
+
+# Simulated phenology data (species active intervals)
+phenology_data <- tibble(
+  species = c("A", "B", "C", "D", "E"),
+  start_day = c(100, 120, 140, 160, 180),
+  end_day   = c(150, 170, 190, 210, 230)
+)
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
+
+```{r}
+# Create edges if there is any temporal overlap
+edges <- expand.grid(from = phenology_data$species, to = phenology_data$species) %>%
+  filter(from != to) %>%
+  rowwise() %>%
+  mutate(
+    from_start = phenology_data$start_day[match(from, phenology_data$species)],
+    from_end   = phenology_data$end_day[match(from, phenology_data$species)],
+    to_start   = phenology_data$start_day[match(to, phenology_data$species)],
+    to_end     = phenology_data$end_day[match(to, phenology_data$species)],
+    overlap    = !(from_end < to_start | from_start > to_end)
+  ) %>%
+  filter(overlap) %>%
+  select(from, to)
+```
+
+# Step 3: Create a Static igraph Network
+```{r}
+library(igraph)
+
+g_static <- graph_from_data_frame(edges, directed = FALSE)
+plot(g_static, vertex.label.color = "black", vertex.size = 30)
+```
+#b Step 4: Create a Time-Ordered Dynamic Network
+```{r}
+library(networkDynamic)
+
+# Define activity spells (start and end days)
+spells <- phenology_data %>%
+  mutate(onset = start_day, terminus = end_day) %>%
+  select(species, onset, terminus)
+
+# Create the dynamic network
+dyn_net <- network.initialize(n = nrow(phenology_data), directed = FALSE)
+network.vertex.names(dyn_net) <- phenology_data$species
+
+# Add activity times to nodes
+for (i in 1:nrow(spells)) {
+ # activate.vertices(dyn_net, onset = spells$onset[i], terminus = spells$terminus[i], v = i)
+  # Add the edge
+add.edge(dyn_net, from_idx, to_idx)
+
+# Get the index of the most recently added edge
+edge_id <- network.edgecount(dyn_net)
+
+# Activate that edge over the time it overlaps
+activate.edges(dyn_net, onset = overlap_start, terminus = overlap_end, e = edge_id)
+}
+
+# Add edges if overlap occurs
+for (i in 1:nrow(edges)) {
+  from_idx <- which(phenology_data$species == edges$from[i])
+  to_idx <- which(phenology_data$species == edges$to[i])
+  
+  from_start <- phenology_data$start_day[from_idx]
+  from_end   <- phenology_data$end_day[from_idx]
+  to_start   <- phenology_data$start_day[to_idx]
+  to_end     <- phenology_data$end_day[to_idx]
+  
+  overlap_start <- max(from_start, to_start)
+  overlap_end   <- min(from_end, to_end)
+  
+  # Add the edge
+add.edge(dyn_net, from_idx, to_idx)
+
+# Get the index of the most recently added edge
+edge_id <- network.edgecount(dyn_net)
+
+# Activate that edge over the time it overlaps
+activate.edges(dyn_net, onset = overlap_start, terminus = overlap_end, e = edge_id)
+}
+```
+
+```{r}
+
+# Temporal network stats: returns degree, betweenness, closeness, etc.
+library(tsna)
+
+tstats <- tSnaStats(
+  dyn_net,
+  snafun ='betweenness',   # <-- here’s the key
+  start = 100,
+  end = 230,
+  time.interval = 10
+)
+
+print(tstats)
+```
+
+```{r}
+plot(dyn_net, displaylabels = TRUE)
+```
+
+```{r}
+tSnaStats(dyn_net, snafun = "betweenness", start = 100, end = 230, time.interval = 10)
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(phenology_data, aes(x = start_day, xend = end_day, y = species, yend = species)) +
+  geom_segment(linewidth = 4, color = "steelblue") +
+  labs(title = "Phenology Periods for Each Species", x = "Day of Year", y = "Species") +
+  theme_minimal()
+```
+
+```{r}
+cumulative_presence_fitered_2023 <- cumulative_presence %>% filter(year(first_presence) %in% c(2023)) 
+```
+
+```{r}
+pheno_cal_2023 <-cumulative_presence_fitered_2023 %>% mutate(start_day=yday(first_presence),end_day=yday(last_presence), species=class) %>% select(species,start_day,end_day) %>% as.data.frame()
+```
+
+
+```{r}
+ggplot(pheno_cal_2023, aes(x = start_day, xend = end_day, y = species, yend = species)) +
+  geom_segment(linewidth = 4, color = "steelblue") +
+  labs(title = "Phenology Periods for Each Species", x = "Day of Year", y = "Species") +
+  theme_minimal()
+```
+
+```{r}
+# Create edges if there is any temporal overlap
+edges_cal <- expand.grid(from = pheno_cal_2023$species, to = pheno_cal_2023$species) %>%
+  filter(from != to) %>%
+  rowwise() %>%
+  mutate(
+    from_start = pheno_cal_2023$start_day[match(from, pheno_cal_2023$species)],
+    from_end   = pheno_cal_2023$end_day[match(from, pheno_cal_2023$species)],
+    to_start   = pheno_cal_2023$start_day[match(to, pheno_cal_2023$species)],
+    to_end     = pheno_cal_2023$end_day[match(to, pheno_cal_2023$species)],
+    overlap    = !(from_end < to_start | from_start > to_end)
+  ) %>%
+  filter(overlap) %>%
+  select(from, to)
+```
+
+
+# Step 3: Create a Static igraph Network
+```{r}
+
+g_static_cal <- graph_from_data_frame(edges_cal, directed = FALSE)
+plot(g_static_cal, vertex.label.color = "black", vertex.size = 30)
+```
+
+#b Step 4: Create a Time-Ordered Dynamic Network
+```{r}
+
+# Define activity spells (start and end days)
+spells_cal <- pheno_cal_2023 %>%
+  mutate(onset = start_day, terminus = end_day) %>%
+  select(species, onset, terminus)
+
+# Create the dynamic network
+dyn_net_cal <- network.initialize(n = nrow(pheno_cal_2023), directed = FALSE)
+network.vertex.names(dyn_net_cal) <- pheno_cal_2023$species
+
+# Add activity times to nodes
+for (i in 1:nrow(spells_cal)) {
+ # activate.vertices(dyn_net, onset = spells$onset[i], terminus = spells$terminus[i], v = i)
+  # Add the edge
+add.edge(dyn_net_cal, from_idx, to_idx)
+
+# Get the index of the most recently added edge
+edge_id_cal <- network.edgecount(dyn_net_cal)
+
+# Activate that edge over the time it overlaps
+activate.edges(dyn_net_cal, onset = overlap_start, terminus = overlap_end, e = edge_id_cal)
+}
+
+# Add edges if overlap occurs
+for (i in 1:nrow(edges_cal)) {
+  from_idx <- which(pheno_cal_2023$species == edges_cal$from[i])
+  to_idx <- which(pheno_cal_2023$species == edges_cal$to[i])
+  
+  from_start_cal <- pheno_cal_2023$start_day[from_idx]
+  from_end_cal   <- pheno_cal_2023$end_day[from_idx]
+  to_start_cal   <- pheno_cal_2023$start_day[to_idx]
+  to_end_cal     <- pheno_cal_2023$end_day[to_idx]
+  
+  overlap_start <- max(from_start_cal, to_start_cal)
+  overlap_end   <- min(from_end_cal, to_end_cal)
+  
+  # Add the edge
+add.edge(dyn_net_cal, from_idx, to_idx)
+
+# Get the index of the most recently added edge
+edge_id_cal <- network.edgecount(dyn_net_cal)
+
+# Activate that edge over the time it overlaps
+activate.edges(dyn_net_cal, onset = overlap_start, terminus = overlap_end, e = edge_id_cal)
+}
+```
+
+
+```{r}
+
+# Temporal network stats: returns degree, betweenness, closeness, etc.
+
+
+tstats_cal <- tSnaStats(
+  dyn_net_cal,
+  snafun ='betweenness',   # <-- here’s the key
+  start = 100,
+  end = 230,
+  time.interval = 10
+)
+
+print(tstats_cal)
+```
+```{r}
+plot(dyn_net_cal, displaylabels = TRUE)
+```
+
+```{r}
+tSnaStats(dyn_net_cal, snafun = "betweenness", start = 100, end = 230, time.interval = 10)
+```
