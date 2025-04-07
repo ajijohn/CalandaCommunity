@@ -249,3 +249,127 @@ plot(dyn_net_cal, displaylabels = TRUE)
 ```{r}
 tSnaStats(dyn_net_cal, snafun = "betweenness", start = 100, end = 230, time.interval = 10)
 ```
+
+
+```{r}
+# Get downstream species (those influenced by focal species)
+get_downstream <- function(focal, df) {
+  f_start <- df$start_day[df$species == focal]
+  f_end   <- df$end_day[df$species == focal]
+  
+  df %>%
+    filter(species != focal) %>%
+    filter(start_day >= f_start & start_day <= f_end |
+           start_day > f_end & start_day - f_end <= 30) %>%  # allow 30-day influence gap
+    pull(species)
+}
+
+# Get upstream species (those that could influence focal species)
+get_upstream <- function(focal, df) {
+  f_start <- df$start_day[df$species == focal]
+  f_end   <- df$end_day[df$species == focal]
+  
+  df %>%
+    filter(species != focal) %>%
+    filter(end_day >= f_start & end_day <= f_end |
+           end_day < f_start & f_start - end_day <= 30) %>%  # allow 30-day gap
+    pull(species)
+}
+
+# Compute sets
+downstream_list <- lapply(pheno_cal_2023$species, get_downstream, df = pheno_cal_2023)
+upstream_list   <- lapply(pheno_cal_2023$species, get_upstream, df = pheno_cal_2023)
+
+names(downstream_list) <- pheno_cal_2023$species 
+names(upstream_list) <- pheno_cal_2023$species 
+
+# Convert to data frames
+down_df <- tibble(
+  species = names(downstream_list),
+  downstream_count = sapply(downstream_list, length)
+)
+
+up_df <- tibble(
+  species = names(upstream_list),
+  upstream_count = sapply(upstream_list, length)
+)
+
+
+species_names <- names(upstream_list)
+counts <- sapply(upstream_list, length)
+
+length(species_names)  # Should be 45
+length(counts)         # Should be 45
+
+down_df <- data.frame(
+  species = names(downstream_list),
+  downstream_count = sapply(downstream_list, length),
+  stringsAsFactors = FALSE
+)
+
+up_df <- data.frame(
+  species = names(upstream_list),
+  upstream_count = sapply(upstream_list, length),
+  stringsAsFactors = FALSE
+)
+
+```
+
+
+```{r}
+# Combine and reshape
+combined_df <- left_join(up_df, down_df, by = "species") %>%
+  pivot_longer(cols = c(upstream_count, downstream_count),
+               names_to = "set_type", values_to = "count") %>%
+  mutate(set_type = recode(set_type,
+                           upstream_count = "Upstream",
+                           downstream_count = "Downstream"))
+
+# Plot
+ggplot(combined_df, aes(x = species, y = count, fill = set_type)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +
+  labs(title = "Temporal Influence by Species",
+       y = "Number of Species in Set", x = "Species") +
+  scale_fill_manual(values = c("Upstream" = "tomato", "Downstream" = "steelblue")) +
+  theme_minimal(base_size = 14)
+  
+```
+## horizontal plot
+
+```{r}
+ggplot(combined_df, aes(x = reorder(species, count), y = count, fill = set_type)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +
+  coord_flip() +
+  labs(title = "Temporal Influence by Species",
+       y = "Number of Species in Set", x = "Species") +
+  scale_fill_manual(values = c("Upstream" = "tomato", "Downstream" = "steelblue")) +
+  theme_minimal(base_size = 12)
+```  
+
+
+# show only top 15 influentail species
+
+
+```{r}
+
+top_species <- combined_df %>%
+  group_by(species) %>%
+  summarise(total = sum(count)) %>%
+  slice_max(total, n = 15) %>%
+  pull(species)
+
+filtered_df <- combined_df %>% filter(species %in% top_species)
+
+ggplot(filtered_df, aes(x = reorder(species, count), y = count, fill = set_type)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +
+  coord_flip() +
+  labs(title = "Top 15 Influential Species",
+       y = "Number of Species in Set", x = "Species") +
+  scale_fill_manual(values = c("Upstream" = "tomato", "Downstream" = "steelblue")) +
+  theme_minimal(base_size = 12)
+```    
+# Write the data out
+
+```{r}
+pheno_cal_2023 %>% write_csv('./data/vol-rud_cal-phene-2023.csv')
+```   

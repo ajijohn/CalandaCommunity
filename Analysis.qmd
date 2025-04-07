@@ -1,0 +1,359 @@
+---
+title: "Analysis"
+format: html
+editor: visual
+---
+
+## Load pkgs
+
+```{r}
+# Load packages
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(tidyr)
+library(igraph)
+```
+
+## Running Code
+
+	•	window: An integer (default = 30) that defines the buffer window in days for influence consideration. For example:
+	•	A species starting within 30 days after another species ends might still be influenced by it.
+	•	A species ending within 30 days before another species starts might influence it.
+
+	1.	Initial Setup:
+	    - Two empty lists: upstream_list and downstream_list to store influence relationships for each species.
+	2.	Outer Loop (Species A = focal):
+	   - For each species (row i in the dataframe), extract its flowering period: f_start, f_end.
+	3.	Inner Loop (Species B = other):
+	    - 	Compare every other species (j) to the focal species i:
+	    - 	If j == i, skip (a species doesn’t influence itself).
+	    - 	Extract start_day and end_day of the other species.
+	4.	Downstream Logic:
+	    - 	If species B’s start day (o_start) is: Later than or equal to species A’s start (f_start), AND
+	        No more than window days after species A ends (f_end + window)
+	         Then species A may influence species B ➝ add B to A’s downstream.
+	5.	Upstream Logic:
+	    - If species B’s end day (o_end) is: Earlier than or equal to species A’s end (f_end), AND 
+	    No more than window days before species A starts (f_start - window)
+	        Then species B may influence species A ➝ add B to A’s upstream.
+	6.	Store Influence Lists:
+	    - For each focal species, save its unique upstream and downstream sets.
+
+
+```{r}
+
+# Load your data
+df <- read_csv("./data/vol-rud_cal-phene-2023.csv")
+
+# Initialize lists
+downstream_list <- list()
+upstream_list <- list()
+
+# Loop through all species
+for (i in 1:nrow(df)) {
+  focal <- df[i, ]
+  focal_downstream <- c()
+  focal_upstream <- c()
+  
+  for (j in 1:nrow(df)) {
+    if (i == j) next
+    
+    other <- df[j, ]
+    
+    f_start <- focal$start_day
+    f_end   <- focal$end_day
+    o_start <- other$start_day
+    o_end   <- other$end_day
+    
+    # Downstream: other starts after focal, and within 30 days of focal's end
+    if (o_start >= f_start && o_start <= f_end + 30) {
+      focal_downstream <- c(focal_downstream, other$species)
+    }
+    
+    # Upstream: other ends before or during focal, and within 30 days before focal's start
+    if (o_end <= f_end && o_end >= f_start - 30) {
+      focal_upstream <- c(focal_upstream, other$species)
+    }
+  }
+  
+  downstream_list[[focal$species]] <- unique(focal_downstream)
+  upstream_list[[focal$species]] <- unique(focal_upstream)
+}
+
+# Create influence counts
+influence_df <- data.frame(
+  species = names(downstream_list),
+  downstream_count = sapply(downstream_list, length),
+  upstream_count = sapply(upstream_list, length),
+  stringsAsFactors = FALSE
+)
+
+# View top temporal keystone species (most downstream influence)
+influence_df %>%
+  arrange(desc(downstream_count)) %>%
+  head(10)
+```
+# Horizontal Bar Chart of Upstream/Downstream Influence
+
+```{r}
+# Reshape for plotting
+plot_df <- influence_df %>%
+  pivot_longer(cols = c(upstream_count, downstream_count),
+               names_to = "type", values_to = "count") %>%
+  mutate(type = ifelse(type == "upstream_count", "Upstream", "Downstream"))
+
+# Plot
+ggplot(plot_df, aes(x = reorder(species, count), y = count, fill = type)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  coord_flip() +
+  labs(title = "Temporal Influence (Upstream vs. Downstream)",
+       x = "Species", y = "Number of Influences") +
+  scale_fill_manual(values = c("Upstream" = "tomato", "Downstream" = "steelblue")) +
+  theme_minimal(base_size = 12)
+```
+
+
+```{r}
+
+# Build edge list from downstream relationships
+edges <- data.frame(from = character(), to = character(), stringsAsFactors = FALSE)
+
+for (sp in names(downstream_list)) {
+  to_species <- downstream_list[[sp]]
+  if (length(to_species) > 0) {
+    edges <- rbind(edges, data.frame(from = rep(sp, length(to_species)), to = to_species))
+  }
+}
+
+# Create and plot network
+g <- graph_from_data_frame(edges, directed = TRUE)
+
+plot(g,
+     vertex.label.cex = 0.6,
+     vertex.size = 5,
+     edge.arrow.size = 0.3,
+     main = "Temporal Influence Network (Directed)")
+```
+
+# Phenology Timeline (Co-occurrence Strip Plot)
+```{r}
+# Strip plot
+ggplot(df, aes(x = start_day, xend = end_day, y = reorder(species, start_day), yend = species)) +
+  geom_segment(linewidth = 2, color = "forestgreen") +
+  labs(title = "Flowering Periods of Alpine Species",
+       x = "Day of Year", y = "Species") +
+  theme_minimal(base_size = 24)
+```
+# Keystone species - those with high downstream count
+
+```{r}
+# Top 10 keystone species by downstream influence
+keystones <- influence_df %>%
+  arrange(desc(downstream_count)) %>%
+  slice(1:10) %>%
+  pull(species)
+```
+
+# Highlight Keystone Species in the Timeline Plot
+
+```{r}
+
+# Add a keystone flag
+df <- df %>%
+  mutate(keystone = ifelse(species %in% keystones, "Keystone", "Other"))
+
+# Timeline plot with highlights
+p_timeline <- ggplot(df, aes(x = start_day, xend = end_day,
+                             y = reorder(species, start_day), yend = species,
+                             color = keystone)) +
+  geom_segment(linewidth = 2) +
+  scale_color_manual(values = c("Keystone" = "red", "Other" = "gray50")) +
+  labs(title = "Flowering Periods of Alpine Species (Keystone Highlighted)",
+       x = "Day of Year", y = "Species") +
+  theme_minimal(base_size = 14)
+
+p_timeline
+# Save high-res timeline plot
+ggsave("figs/alpine_flowering_timeline_keystones.png", p_timeline, width = 12, height = 10, dpi = 300)
+```
+
+# Highlight Keystone Species in the Directed Network
+```{r}
+library(igraph)
+
+# Build edge list
+edges <- data.frame(from = character(), to = character(), stringsAsFactors = FALSE)
+
+for (sp in names(downstream_list)) {
+  to_species <- downstream_list[[sp]]
+  if (length(to_species) > 0) {
+    edges <- rbind(edges, data.frame(from = rep(sp, length(to_species)), to = to_species))
+  }
+}
+
+# Create graph
+g <- graph_from_data_frame(edges, directed = TRUE)
+
+# Set node color: red = keystone, gray = other
+V(g)$color <- ifelse(V(g)$name %in% keystones, "red", "lightgray")
+
+# Save high-res network diagram
+png("figs/temporal_influence_network_keystones.png", width = 1600, height = 1200, res = 300)
+plot(g,
+     vertex.label.cex = 0.6,
+     vertex.size = 5,
+     edge.arrow.size = 0.3,
+     main = "Temporal Influence Network (Keystones Highlighted)")
+dev.off()
+```
+
+# Let’s simulate a 30-day phenological shift —
+
+say, caused by a climate-induced event like early snowmelt or a heatwave — and see how it affects the temporal structure of the alpine flowering community.but, only jestoe species
+```{r}
+
+
+# Load the data
+df <- read_csv("./data/vol-rud_cal-phene-2023.csv")
+
+# ---- FUNCTION: Calculate upstream and downstream counts ----
+calculate_influence <- function(data, window = 30) {
+  upstream_list <- list()
+  downstream_list <- list()
+  
+  for (i in 1:nrow(data)) {
+    focal <- data[i, ]
+    f_start <- focal$start_day
+    f_end   <- focal$end_day
+    
+    upstream <- c()
+    downstream <- c()
+    
+    for (j in 1:nrow(data)) {
+      if (i == j) next
+      other <- data[j, ]
+      o_start <- other$start_day
+      o_end   <- other$end_day
+      
+      if (o_start >= f_start && o_start <= f_end + window) {
+        downstream <- c(downstream, other$species)
+      }
+      if (o_end <= f_end && o_end >= f_start - window) {
+        upstream <- c(upstream, other$species)
+      }
+    }
+    
+    upstream_list[[focal$species]] <- unique(upstream)
+    downstream_list[[focal$species]] <- unique(downstream)
+  }
+  
+  # Create influence dataframe
+  data.frame(
+    species = names(upstream_list),
+    upstream_count = sapply(upstream_list, length),
+    downstream_count = sapply(downstream_list, length),
+    stringsAsFactors = FALSE
+  )
+}
+
+# ---- STEP 1: Original Influence Metrics ----
+influence_before <- calculate_influence(df)
+
+# ---- STEP 2: Identify Top 10 Keystone Species (by downstream count) ----
+keystones <- influence_before %>%
+  arrange(desc(downstream_count)) %>%
+  slice(1:10) %>%
+  pull(species)
+
+# ---- STEP 3: Apply 30-day Shift to Keystone Species ----
+df_shifted <- df %>%
+  mutate(
+    start_day = ifelse(species %in% keystones, start_day - 30, start_day),
+    end_day   = ifelse(species %in% keystones, end_day - 30, end_day)
+  )
+
+# ---- STEP 4: Influence After Shift ----
+influence_after <- calculate_influence(df_shifted)
+
+# ---- STEP 5: Merge Before/After and Calculate Differences ----
+compare_df <- influence_before %>%
+  rename(upstream_before = upstream_count,
+         downstream_before = downstream_count) %>%
+  inner_join(
+    influence_after %>%
+      rename(upstream_after = upstream_count,
+             downstream_after = downstream_count),
+    by = "species"
+  ) %>%
+  mutate(
+    upstream_change = upstream_after - upstream_before,
+    downstream_change = downstream_after - downstream_before
+  )
+
+# ---- STEP 6: Plot Change in Downstream Influence ----
+ggplot(compare_df, aes(x = reorder(species, downstream_change), y = downstream_change)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Change in Downstream Influence After 30-Day Phenological Shift",
+    x = "Species", y = "Change in Downstream Count"
+  ) +
+  theme_minimal(base_size = 13)
+
+# ---- Optional: Save to file ----
+ggsave("figs/phenology_influence_shift.png", width = 12, height = 8, dpi = 300)
+```
+# Visualize Before vs. After Influence (Side-by-Side Bar Chart)
+```{r}
+# Reshape for side-by-side comparison
+compare_long <- compare_df %>%
+  select(species, downstream_before, downstream_after) %>%
+  pivot_longer(cols = starts_with("downstream"),
+               names_to = "version", values_to = "count") %>%
+  mutate(version = recode(version,
+                          downstream_before = "Before Shift",
+                          downstream_after = "After Shift"))
+
+# Plot side-by-side bars
+ggplot(compare_long, aes(x = reorder(species, count), y = count, fill = version)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7)) +
+  coord_flip() +
+  labs(
+    title = "Before vs. After Keystone Species Shift (30 Days Earlier)",
+    x = "Species", y = "Downstream Influence Count"
+  ) +
+  scale_fill_manual(values = c("Before Shift" = "tomato", "After Shift" = "steelblue")) +
+  theme_minimal(base_size = 13)
+```
+# Highlight Species with the Biggest Influence Change
+```{r}
+# Show top 10 biggest changes in downstream influence
+compare_df %>%
+  arrange(desc(abs(downstream_change))) %>%
+  slice(1:10) %>%
+  select(species, downstream_before, downstream_after, downstream_change)
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+
+The `echo: false` option disables the printing of code (only output is displayed).
